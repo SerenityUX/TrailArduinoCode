@@ -1,10 +1,19 @@
 #include <Wire.h>
 #include <WiFi.h>
-#include <ArduinoJson.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include <string.h>
 #include <Arduino.h>
 #include "hardware/pwm.h"
+#include <SD.h>
+
+// Wi-Fi credentials
+const char* ssid = "iPhone (49)";
+const char* password = "password123";
+
+// Flask API endpoint
+const char* serverName = "https://0e4854f9-fc1d-4e85-ae67-716497878275-00-3iljm67nm0fv9.picard.replit.dev/";
 
 // Pin definitions
 const int ledPin = LED_BUILTIN;
@@ -29,6 +38,9 @@ const int d8Pin = 12;
 const int d9Pin = 13;
 const int resetPin = 26;
 const int pwonPin = 19;
+
+// SD card chip select pin
+const int chipSelect = 10; // CS pin for SPI, set to -1 for SDIO
 
 // Variables
 volatile bool snappingPhoto = false;
@@ -80,6 +92,26 @@ void setup() {
 
   // Initialize camera
   cameraInitialized = initCamera();
+
+  // Initialize SD card
+  if (!SD.begin(chipSelect)) {
+    Serial.println("Card failed, or not present");
+    return;
+  }
+  Serial.println("Card initialized.");
+
+
+
+  // Create and write to file
+  File myFile = SD.open("test.txt", FILE_WRITE);
+  if (myFile) {
+    Serial.println("Writing to file...");
+    myFile.println("helloWorld");
+    myFile.close();
+    Serial.println("Done.");
+  } else {
+    Serial.println("Error opening file.");
+  }
 }
 
 bool writeRegister(uint8_t reg, uint8_t value) {
@@ -143,6 +175,7 @@ void startXCLK() {
 void snapPhoto() {
   if (cameraInitialized) {
     Serial.println("Snap Photo: Camera is working");
+
     captureFrame();
   } else {
     Serial.println("Snap Photo: Camera initialization failed");
@@ -150,6 +183,17 @@ void snapPhoto() {
 }
 
 void captureFrame() {
+
+    // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+
+  sendToServer("dataComing");
+
   Serial.println("Capturing frame...");
   String frameData = "";  // Initialize an empty string to hold the frame data
 
@@ -180,17 +224,18 @@ void captureFrame() {
       // Wait for PCLK (pixel clock)
       while (digitalRead(pclkPin) == LOW);
       byte pixelData = readPixelData();
-      frameData += String(pixelData, HEX) + " ";
+      frameData += String(pixelData, HEX);
       while (digitalRead(pclkPin) == HIGH);
     }
-    frameData += "\n";
   }
 
   // Print the entire frame data at once
   Serial.println(frameData);
   Serial.println("Frame capture complete");
-}
 
+  // Send the frame data to the server
+  sendToServer(frameData);
+}
 
 byte readPixelData() {
   byte data = 0;
@@ -205,9 +250,49 @@ byte readPixelData() {
   return data;
 }
 
+void sendToServer(String frameData) {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure client;
+    client.setInsecure(); // Disable certificate verification for simplicity, not recommended for production
+
+    HTTPClient http;
+    http.begin(client, serverName);
+    http.addHeader("Content-Type", "text/plain");
+
+    int httpResponseCode = http.POST(frameData);
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.println("HTTP Response code: " + String(httpResponseCode));
+      Serial.println("Response: " + response);
+    } else {
+      Serial.println("Error on sending POST: " + String(httpResponseCode));
+    }
+    http.end();
+  } else {
+    Serial.println("WiFi Disconnected");
+  }
+}
+
 void savePhoto() {
   Serial.println("Save Photo to SD Card");
-  // Add actual photo saving code here
+
+  // Initialize SD card
+  if (!SD.begin(chipSelect)) {
+    Serial.println("Card failed, or not present");
+    return;
+  }
+  Serial.println("Card initialized.");
+
+  // Create and write to file
+  File myFile = SD.open("test.txt", FILE_WRITE);
+  if (myFile) {
+    Serial.println("Writing to file...");
+    myFile.println("helloWorld");
+    myFile.close();
+    Serial.println("Done.");
+  } else {
+    Serial.println("Error opening file.");
+  }
 }
 
 void loop() {
@@ -249,3 +334,4 @@ void updateEncoder() {
 
   lastEncoded = encoded; // store this value for next time
 }
+
